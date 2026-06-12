@@ -2448,7 +2448,17 @@ let T=0, smokeT=0, fountT=0;
 let windK=1;
 function easeOutBack(t){ const c=1.70158; return 1 + (c+1)*Math.pow(t-1,3) + c*Math.pow(t-1,2); }
 
+let lastErr='';
 function frame(){
+  try{ frameInner(); }
+  catch(e){
+    if(!lastErr){ console.error('Error en el bucle:', e); }
+    lastErr=(e && e.message)? e.message : String(e);
+    hudDirty=true;
+    try{ renderer.render(scene, camera); }catch(e2){}
+  }
+}
+function frameInner(){
   const dt=Math.min(clock.getDelta(), .05);
   T+=dt;
 
@@ -2595,6 +2605,7 @@ addEventListener('resize', ()=>{
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 const WORLD_SC = 1/16;             // escala maqueta
+let usingLocalSpace=false;         // respaldo si el visor no da 'local-floor'
 const tmpMat = new THREE.Matrix4();
 let ctrlR=null, ctrlL=null, vrMoveTarget=null;
 let worldYaw=0, worldDist=1.05;    // metros reales
@@ -2651,6 +2662,11 @@ function drawVrHud(){
   } else if(birdState.active){
     g.fillStyle='#f6e8cf'; g.font='500 22px Fredoka, sans-serif';
     g.fillText('🏆 Todas las misiones cumplidas', 26, 168);
+  }
+  // error de diagnóstico (si lo hubiera)
+  if(lastErr){
+    g.fillStyle='#e07a6a'; g.font='600 19px monospace';
+    g.fillText('⚠ '+lastErr.slice(0,40), 26, 268);
   }
   // último aviso
   if(lastToastTxt){
@@ -2733,9 +2749,10 @@ function stepLight(d){
 }
 
 /* colocar el diorama como una mesa frente al jugador */
+function tableY(){ return usingLocalSpace ? -0.42 : 0.95; }
 function applyTable(){
   world.rotation.y=worldYaw;
-  world.position.set(0, 0.95, -worldDist);
+  world.position.set(0, tableY(), -worldDist);
 }
 
 /* lectura de sticks y botones cada frame */
@@ -2784,8 +2801,11 @@ lantern.userData.baseDist=lantern.distance;
 plotGlow.userData.baseDist=plotGlow.distance;
 if(renderer.xr.setFramebufferScaleFactor) renderer.xr.setFramebufferScaleFactor(0.9);
 renderer.xr.addEventListener('sessionstart', function(){
+ try{
   controllers.forEach(function(c){ c.visible=true; });
-  hudPanel.visible=true; hudDirty=true; drawVrHud();
+  hudPanel.visible=true; hudDirty=true;
+  hudPanel.position.y = usingLocalSpace ? -0.18 : 1.18;
+  drawVrHud();
   scaleParticleMats(WORLD_SC);
   sun.shadow.mapSize.set(1024,1024);
   if(sun.shadow.map){ sun.shadow.map.dispose(); sun.shadow.map=null; }
@@ -2802,6 +2822,7 @@ renderer.xr.addEventListener('sessionstart', function(){
   scene.fog.near=8; scene.fog.far=30;   // sin niebla sobre la mesa
   vrMoveTarget=null;
   drawLabel();
+ }catch(e){ console.error('sessionstart:', e); lastErr=(e&&e.message)||String(e); hudDirty=true; }
 });
 renderer.xr.addEventListener('sessionend', function(){
   controllers.forEach(function(c){ c.visible=false; });
@@ -2847,7 +2868,16 @@ vrBtn.addEventListener('click', function(){
   if(!xrReady){
     toast('No se detecta visor VR aquí · abre esta página en el <b>Pico Browser</b>'); return;
   }
-  navigator.xr.requestSession('immersive-vr', {optionalFeatures:['local-floor','bounded-floor','hand-tracking']})
+  usingLocalSpace=false;
+  renderer.xr.setReferenceSpaceType('local-floor');
+  navigator.xr.requestSession('immersive-vr',
+      {requiredFeatures:['local-floor'], optionalFeatures:['bounded-floor','hand-tracking']})
+    .catch(function(){
+      // el visor no concede 'local-floor': usamos 'local' (origen a la altura de la cabeza)
+      usingLocalSpace=true;
+      renderer.xr.setReferenceSpaceType('local');
+      return navigator.xr.requestSession('immersive-vr', {optionalFeatures:['hand-tracking']});
+    })
     .then(function(session){ renderer.xr.setSession(session); })
     .catch(function(err){ toast('No se pudo iniciar la sesión VR'); console.warn(err); });
 });
